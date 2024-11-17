@@ -63,9 +63,15 @@ class ElyaAgent(Agent):
         """
         Use heuristic evaluation to select a move during the midgame phase.
         """
-        # heuristic for each move
         def evaluate_move(move):
+            if move not in valid_moves:
+                return float('-inf')  # Safeguard against invalid moves
+
             temp_board = execute_move(board.copy(), move, player)
+            if temp_board is None:
+                print(f"Invalid move detected: {move}")
+                return float('-inf')  # Safeguard against execution errors
+
             opponent_moves = len(get_valid_moves(temp_board, opponent))
             stable_discs = self.count_stable_discs(temp_board, player)
             return -opponent_moves + stable_discs
@@ -103,4 +109,5 @@ class ElyaAgent(Agent):
         if r in {0, rows - 1} or c in {0, cols - 1}:
             return True
 
+        # Additional stability checks can be added for more precision
         return False
