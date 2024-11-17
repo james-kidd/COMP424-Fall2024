@@ -1,113 +1,105 @@
 from agents.agent import Agent
 from store import register_agent
-import sys
+from helpers import get_valid_moves, count_capture, execute_move, check_endgame
+import copy
+import random
 import numpy as np
-from copy import deepcopy
-import time
-from helpers import random_move, count_capture, execute_move, check_endgame, get_valid_moves
 
 @register_agent("elya_agent")
 class ElyaAgent(Agent):
-    """
-    A class for your implementation. Feel free to use this class to
-    add any helper functionalities needed for your agent.
-    """
 
     def __init__(self):
-        super(ElyaAgent, self).__init__()
-        self.name = "ElyaAgent"
+        super().__init__()
+        self.name = "elya_agent"
 
-    def step(self, chess_board, player, opponent):
-        """
-        Implements the step function of your agent, determining the next move
-        based on the current game phase.
-        """
-        start_time = time.time()
-        valid_moves = get_valid_moves(chess_board, player)
+    def step(self, board, color, opponent):
+        legal_moves = get_valid_moves(board, color)
 
-        if not valid_moves:
-            # Pass if no valid moves are available
-            return None
+        if not legal_moves:
+            return None  # No valid moves available, pass turn
 
-        # Determine the current game phase
-        num_empty_cells = np.sum(chess_board == 0)
-        if num_empty_cells > 40:  # Opening phase
-            move = self.opening_phase(chess_board, player, valid_moves)
-        elif num_empty_cells > 10:  # Midgame phase
-            move = self.midgame_phase(chess_board, player, valid_moves, opponent)
+        # Determine the game phase based on the number of empty cells
+        empty_cells = np.sum(board == 0)
+        if empty_cells > 40:  # Opening phase
+            return self.opening_phase(board, color, legal_moves)
+        elif empty_cells > 10:  # Midgame phase
+            return self.midgame_phase(board, color, opponent, legal_moves)
         else:  # Endgame phase
-            move = self.endgame_phase(chess_board, player, valid_moves, opponent)
+            return self.endgame_phase(board, color, legal_moves)
 
-        time_taken = time.time() - start_time
-        print(f"My AI's turn took {time_taken:.4f} seconds.")
-
-        return move
-
-    def opening_phase(self, board, player, valid_moves):
+    def opening_phase(self, board, color, legal_moves):
         """
-        Select a move prioritizing corners and maximizing mobility in the opening phase.
+        Opening phase strategy: prioritize corners and maximize mobility.
         """
-        # Define corners
-        corners = [(0, 0), (0, board.shape[1] - 1),
-                   (board.shape[0] - 1, 0), (board.shape[0] - 1, board.shape[1] - 1)]
+        # Define corner positions
+        corners = [(0, 0), (0, len(board) - 1), (len(board) - 1, 0), (len(board) - 1, len(board) - 1)]
 
         # Prioritize corners if available
-        for move in valid_moves:
+        for move in legal_moves:
             if move in corners:
                 return move
 
-        # Otherwise, maximize mobility
-        return max(valid_moves, key=lambda m: len(get_valid_moves(execute_move(board.copy(), m, player), player)))
+        # Otherwise, choose a move that maximizes mobility
+        return max(legal_moves, key=lambda move: len(get_valid_moves(execute_move(copy.deepcopy(board), move, color), color)))
 
-    def midgame_phase(self, board, player, valid_moves, opponent):
+    def midgame_phase(self, board, color, opponent, legal_moves):
         """
-        Use heuristic evaluation to select a move during the midgame phase.
+        Midgame phase strategy: heuristic evaluation focusing on mobility, stability, and opponent disruption.
         """
-        def evaluate_move(move):
-            if move not in valid_moves:
-                return float('-inf')  # Safeguard against invalid moves
+        best_move = None
+        best_score = float('-inf')
 
-            temp_board = execute_move(board.copy(), move, player)
-            if temp_board is None:
-                print(f"Invalid move detected: {move}")
-                return float('-inf')  # Safeguard against execution errors
+        for move in legal_moves:
+            simulated_board = copy.deepcopy(board)
+            execute_move(simulated_board, move, color)
+            move_score = self.evaluate_board(simulated_board, color, opponent)
+            if move_score > best_score:
+                best_score = move_score
+                best_move = move
 
-            opponent_moves = len(get_valid_moves(temp_board, opponent))
-            stable_discs = self.count_stable_discs(temp_board, player)
-            return -opponent_moves + stable_discs
+        return best_move if best_move else random.choice(legal_moves)
 
-        # Choose the move with the best heuristic score
-        return max(valid_moves, key=evaluate_move)
+    def endgame_phase(self, board, color, legal_moves):
+        """
+        Endgame phase strategy: maximize immediate captures and stable discs.
+        """
+        # Maximize disc captures in the endgame
+        return max(legal_moves, key=lambda move: count_capture(board, move, color))
 
-    def endgame_phase(self, board, player, valid_moves, opponent):
-        """
-        Focus on maximizing captures and stability in the endgame phase.
-        """
-        # Evaluate moves based on the number of discs captured
-        return max(valid_moves, key=lambda m: count_capture(board, m, player))
+    def evaluate_board(self, board, color, opponent):
+        corners = [(0, 0), (0, board.shape[1] - 1),
+                   (board.shape[0] - 1, 0), (board.shape[0] - 1, board.shape[1] - 1)]
 
-    def count_stable_discs(self, board, player):
-        """
-        Count the number of stable discs for the given player.
-        """
+        # Corner positions are highly valuable
+        corner_score = sum(1 for corner in corners if board[corner] == color) * 25
+        corner_penalty = sum(1 for corner in corners if board[corner] == opponent) * -25
+
+        # Mobility: the number of moves the opponent can make
+        opponent_moves = len(get_valid_moves(board, opponent))
+        mobility_score = -opponent_moves * 2
+
+        # Stability: stable discs cannot be flipped
+        stability_score = self.count_stable_discs(board, color) * 5
+
+        # Combine scores
+        return corner_score + corner_penalty + mobility_score + stability_score
+
+    def count_stable_discs(self, board, color):
         stable_count = 0
-        rows, cols = board.shape
-        for r in range(rows):
-            for c in range(cols):
-                if board[r, c] == player and self.is_stable(board, (r, c), player):
+        for r in range(len(board)):
+            for c in range(len(board[0])):
+                if board[r, c] == color and self.is_stable(board, (r, c), color):
                     stable_count += 1
         return stable_count
 
-    def is_stable(self, board, position, player):
-        """
-        Determine if a disc at the given position is stable.
-        """
+    def is_stable(self, board, position, color):
+        x, y = position
         rows, cols = board.shape
-        r, c = position
 
-        # Simplified assumption: consider edge or corner discs stable
-        if r in {0, rows - 1} or c in {0, cols - 1}:
+        # Discs in the corners or edges are likely stable
+        if x in {0, rows - 1} or y in {0, cols - 1}:
             return True
 
-        # Additional stability checks can be added for more precision
+        # Add further stability checks for more precision
         return False
+
